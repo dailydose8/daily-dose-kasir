@@ -48,13 +48,37 @@ input,select{background:#fff;color:var(--ink)}button{background:var(--green);col
 </section>
 <section id="tab-reports" class="tab hidden">
 <div class="panel"><div class="row"><h2 style="flex:2">Laporan penjualan</h2><label>Dari <input id="fromDate" type="date"></label><label>Sampai <input id="toDate" type="date"></label><button id="refreshReports">Sinkronkan</button></div>
-<div id="stats" class="statgrid"></div><div class="row no-print" style="margin-top:14px"><button id="exportCsv" class="secondary">Ekspor CSV</button><button id="printReport" class="secondary">Cetak laporan</button></div>
+<div id="stats" class="statgrid"></div>
+<div class="panel" style="margin-top:14px;background:#fbfcf8">
+<h2>Produk terlaris</h2>
+<p class="muted">Jumlah menu dihitung dari kuantitas item pada transaksi dalam rentang tanggal yang dipilih.</p>
+<div id="productStats" class="statgrid"></div>
+<div class="scroll" style="margin-top:10px"><table><thead><tr><th>Peringkat</th><th>Nama menu</th><th>Total terjual</th><th>Omzet produk</th></tr></thead><tbody id="productSalesRows"></tbody></table></div>
+</div>
+<div class="row no-print" style="margin-top:14px"><button id="exportCsv" class="secondary">Ekspor CSV</button><button id="printReport" class="secondary">Cetak laporan</button></div>
 <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Tanggal</th><th>Transaksi</th><th>Metode</th><th>Total</th></tr></thead><tbody id="reportRows"></tbody></table></div>
 <p class="muted">Laporan dimuat langsung dari database online. Klik Sinkronkan untuk memuat data terbaru.</p></div>
 </section>
 <section id="tab-menu" class="tab hidden">
-<div class="panel"><h2>Tambah / ubah menu</h2><form id="menuForm" class="row"><input id="menuId" type="hidden"><input id="menuName" placeholder="Nama menu" required><input id="menuPrice" type="number" min="0" placeholder="Harga (Rp)" required><button type="submit">Simpan menu</button><button type="button" id="cancelEdit" class="secondary">Batal</button></form></div>
-<div class="panel"><div class="scroll"><table><thead><tr><th>Menu</th><th>Harga</th><th>Status</th><th>Aksi</th></tr></thead><tbody id="menuRows"></tbody></table></div></div>
+<div class="panel">
+<div class="row"><h2 style="flex:2">Manajemen menu</h2><button type="button" id="newMenu" class="secondary">+ Menu baru</button></div>
+<p class="muted">Tambah menu, ubah nama atau harga, dan nonaktifkan menu yang sedang habis tanpa menghapus riwayat penjualan.</p>
+<div id="menuSummary" class="statgrid" style="margin:12px 0"></div>
+<form id="menuForm" class="row">
+<input id="menuId" type="hidden">
+<label style="flex:2;min-width:170px">Nama menu<input id="menuName" placeholder="Contoh: Caramel Latte" required maxlength="80" style="width:100%"></label>
+<label style="flex:1;min-width:140px">Harga (Rp)<input id="menuPrice" type="number" min="0" max="2147483647" step="500" placeholder="Contoh: 15000" required style="width:100%"></label>
+<button type="submit" id="saveMenuBtn">Tambah menu</button><button type="button" id="cancelEdit" class="secondary">Batal</button>
+</form>
+<div id="menuFormMsg" class="notice hidden"></div>
+</div>
+<div class="panel">
+<div class="row" style="margin-bottom:12px">
+<label style="flex:2;min-width:180px">Cari menu<input id="menuSearch" type="search" placeholder="Cari nama menu..." style="width:100%"></label>
+<label style="flex:1;min-width:150px">Status<select id="menuStatus" style="width:100%"><option value="all">Semua status</option><option value="active">Aktif</option><option value="inactive">Nonaktif</option></select></label>
+</div>
+<div class="scroll"><table><thead><tr><th>Menu</th><th>Harga</th><th>Status</th><th>Aksi</th></tr></thead><tbody id="menuRows"></tbody></table></div>
+</div>
 </section>
 <section id="tab-history" class="tab hidden">
 <div class="panel"><div class="row"><h2 style="flex:2">Riwayat transaksi</h2><button id="refreshHistory">Muat ulang</button></div><div class="scroll"><table><thead><tr><th>Waktu</th><th>ID</th><th>Item</th><th>Total</th><th>Bayar</th><th></th></tr></thead><tbody id="historyRows"></tbody></table></div></div>
@@ -69,7 +93,7 @@ const money=n=>'Rp'+Number(n||0).toLocaleString('id-ID');
 let sb, user=null, menu=[], cart=[], transactions=[];
 function msg(id,text,error=false){const e=$(id);e.textContent=text;e.classList.remove('hidden','error','ok');e.classList.add(error?'error':'ok')}
 function clearMsg(id){$(id).classList.add('hidden')}
-function isoToday(){return new Date().toISOString().slice(0,10)}
+function isoToday(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
 function validConfig(){return window.APP_CONFIG && APP_CONFIG.supabaseUrl.startsWith('https://') && APP_CONFIG.supabaseAnonKey && !APP_CONFIG.supabaseAnonKey.includes('ISI_')}
 async function init(){
  if(!validConfig()){msg('loginMsg','Konfigurasi belum diisi. Edit file config.js sesuai project Supabase.',true);return}
@@ -134,15 +158,46 @@ $('refreshReports').onclick=loadReports;
 async function loadReports(){
  if(!sb||!user)return;
  const from=$('fromDate').value||isoToday(),to=$('toDate').value||isoToday();
- const start=from+'T00:00:00',end=new Date(to+'T23:59:59.999').toISOString();
- const {data,error}=await sb.from('sales').select('*').gte('created_at',new Date(start).toISOString()).lte('created_at',end).order('created_at',{ascending:false});
+ const start=new Date(from+'T00:00:00'),end=new Date(to+'T23:59:59.999');
+ const {data,error}=await sb.from('sales').select('*').gte('created_at',start.toISOString()).lte('created_at',end.toISOString()).order('created_at',{ascending:false});
  if(error)throw error;transactions=data||[];
  const total=transactions.reduce((s,t)=>s+Number(t.total),0);
  $('stats').innerHTML=`<div class="stat"><small>Omzet</small><strong>${money(total)}</strong></div><div class="stat"><small>Jumlah transaksi</small><strong>${transactions.length}</strong></div><div class="stat"><small>Rata-rata transaksi</small><strong>${money(transactions.length?total/transactions.length:0)}</strong></div>`;
+ // Aggregate quantity and product revenue from the exact sales included in this date range.
+ let productSales=[];
+ if(transactions.length){
+  const saleIds=transactions.map(t=>t.id);
+  const {data:itemData,error:itemError}=await sb.from('sale_items').select('sale_id,item_name,menu_item_id,quantity,unit_price,line_total').in('sale_id',saleIds);
+  if(itemError)throw itemError;
+  const aggregate=new Map();
+  (itemData||[]).forEach(item=>{
+   const key=item.menu_item_id||item.item_name;
+   const old=aggregate.get(key)||{name:item.item_name||'Menu tanpa nama',quantity:0,revenue:0};
+   old.quantity+=Number(item.quantity||0);
+   old.revenue+=Number(item.line_total??(Number(item.unit_price||0)*Number(item.quantity||0)));
+   aggregate.set(key,old);
+  });
+  productSales=[...aggregate.values()].sort((a,b)=>b.quantity-a.quantity||b.revenue-a.revenue||a.name.localeCompare(b.name,'id'));
+ }
+ const unitsSold=productSales.reduce((sum,p)=>sum+p.quantity,0);
+ const topProduct=productSales[0];
+ $('productStats').innerHTML=`<div class="stat"><small>Total menu terjual</small><strong>${unitsSold.toLocaleString('id-ID')} item</strong></div><div class="stat"><small>Jumlah jenis menu terjual</small><strong>${productSales.length}</strong></div><div class="stat"><small>Produk terlaris</small><strong style="font-size:17px">${topProduct?esc(topProduct.name):'—'}</strong><small>${topProduct?topProduct.quantity.toLocaleString('id-ID')+' item terjual':''}</small></div>`;
+ $('productSalesRows').innerHTML=productSales.map((p,i)=>`<tr><td>${i===0?'🏆 1':i+1}</td><td>${esc(p.name)}</td><td><b>${p.quantity.toLocaleString('id-ID')}</b></td><td>${money(p.revenue)}</td></tr>`).join('')||'<tr><td colspan="4">Belum ada item terjual pada rentang tanggal ini.</td></tr>';
  $('reportRows').innerHTML=transactions.map(t=>`<tr><td>${new Date(t.created_at).toLocaleString('id-ID')}</td><td>${esc(t.id.slice(0,8))}</td><td>${esc(t.payment_method)}</td><td>${money(t.total)}</td></tr>`).join('')||'<tr><td colspan="4">Belum ada penjualan pada tanggal ini.</td></tr>';
 }
 $('fromDate').onchange=()=>{};$('toDate').onchange=()=>{};
-$('exportCsv').onclick=()=>{const rows=[['Tanggal','ID Transaksi','Metode','Total','Dibayar','Kembalian'],...transactions.map(t=>[t.created_at,t.id,t.payment_method,t.total,t.paid,t.change_amount])];downloadCsv('laporan-daily-dose.csv',rows)};
+$('exportCsv').onclick=async()=>{
+ try{
+  const rows=[['BAGIAN LAPORAN','Tanggal/rentang',($('fromDate').value||isoToday())+' sampai '+($('toDate').value||isoToday())],[],['TRANSAKSI','Tanggal','ID Transaksi','Metode','Total','Dibayar','Kembalian'],...transactions.map(t=>['Transaksi',t.created_at,t.id,t.payment_method,t.total,t.paid,t.change_amount])];
+  const ids=transactions.map(t=>t.id);
+  let items=[];
+  if(ids.length){const {data,error}=await sb.from('sale_items').select('sale_id,item_name,quantity,unit_price,line_total').in('sale_id',ids);if(error)throw error;items=data||[]}
+  const products=new Map();
+  items.forEach(it=>{const name=it.item_name||'Menu tanpa nama';const p=products.get(name)||{qty:0,revenue:0};p.qty+=Number(it.quantity||0);p.revenue+=Number(it.line_total??(Number(it.unit_price||0)*Number(it.quantity||0)));products.set(name,p)});
+  rows.push([],['RINGKASAN PRODUK','Nama menu','Total terjual','Omzet produk'],...Array.from(products.entries()).map(([name,p])=>['Produk',name,p.qty,p.revenue]).sort((a,b)=>b[2]-a[2]));
+  downloadCsv('laporan-daily-dose.csv',rows);
+ }catch(e){msg('globalMsg','Gagal mengekspor laporan: '+(e.message||String(e)),true)}
+};
 $('printReport').onclick=()=>window.print();
 async function loadHistory(){
  const {data,error}=await sb.from('sales').select('*,sale_items(*)').order('created_at',{ascending:false}).limit(100);
@@ -151,18 +206,50 @@ async function loadHistory(){
  $('historyRows').querySelectorAll('[data-receipt]').forEach(b=>b.onclick=()=>{const t=data.find(x=>x.id===b.dataset.receipt);printReceipt({...t,items:t.sale_items||[]})});
 }
 $('refreshHistory').onclick=loadHistory;
+function resetMenuForm(){
+ $('menuForm').reset();$('menuId').value='';$('saveMenuBtn').textContent='Tambah menu';clearMsg('menuFormMsg');
+}
 $('menuForm').onsubmit=async e=>{
- e.preventDefault();const id=$('menuId').value, name=$('menuName').value.trim(),price=Number($('menuPrice').value);
- if(!name||price<0)return;
- const payload={name,price,active:true};
- const result=id?await sb.from('menu_items').update(payload).eq('id',id):await sb.from('menu_items').insert(payload);
- if(result.error)return msg('globalMsg',result.error.message,true);
- $('menuForm').reset();$('menuId').value='';await loadMenu();msg('globalMsg','Menu berhasil disimpan.',false);
+ e.preventDefault();
+ const id=$('menuId').value, name=$('menuName').value.trim(), price=Number($('menuPrice').value);
+ if(!name)return msg('menuFormMsg','Nama menu wajib diisi.',true);
+ if(!Number.isSafeInteger(price)||price<0||price>2147483647)return msg('menuFormMsg','Harga harus berupa angka bulat Rp0 atau lebih.',true);
+ const duplicate=menu.find(m=>m.name.trim().toLocaleLowerCase('id-ID')===name.toLocaleLowerCase('id-ID')&&m.id!==id);
+ if(duplicate)return msg('menuFormMsg','Nama menu tersebut sudah ada. Gunakan nama yang berbeda atau ubah menu yang sudah ada.',true);
+ const existing=menu.find(m=>m.id===id);
+ const payload={name,price,active:existing?existing.active:true};
+ $('saveMenuBtn').disabled=true;
+ try{
+  const result=id?await sb.from('menu_items').update(payload).eq('id',id):await sb.from('menu_items').insert(payload);
+  if(result.error)throw result.error;
+  resetMenuForm();await loadMenu();msg('globalMsg',id?'Perubahan menu berhasil disimpan.':'Menu baru berhasil ditambahkan.',false);
+ }catch(err){msg('menuFormMsg','Gagal menyimpan menu: '+(err.message||String(err)),true)}
+ $('saveMenuBtn').disabled=false;
 };
-$('cancelEdit').onclick=()=>{$('menuForm').reset();$('menuId').value=''};
-function renderMenuRows(){$('menuRows').innerHTML=menu.map(m=>`<tr><td>${esc(m.name)}</td><td>${money(m.price)}</td><td>${m.active?'Aktif':'Nonaktif'}</td><td><button class="secondary" data-edit="${m.id}">Ubah</button> <button class="danger" data-toggle="${m.id}">${m.active?'Nonaktifkan':'Aktifkan'}</button></td></tr>`).join('')||'<tr><td colspan="4">Menu kosong.</td></tr>';
- $('menuRows').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{const m=menu.find(x=>x.id===b.dataset.edit);$('menuId').value=m.id;$('menuName').value=m.name;$('menuPrice').value=m.price;window.scrollTo({top:0,behavior:'smooth'})});
- $('menuRows').querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{const m=menu.find(x=>x.id===b.dataset.toggle);const {error}=await sb.from('menu_items').update({active:!m.active}).eq('id',m.id);if(error)return msg('globalMsg',error.message,true);await loadMenu()});
+$('cancelEdit').onclick=resetMenuForm;
+$('newMenu').onclick=()=>{resetMenuForm();$('menuName').focus()};
+$('menuSearch').oninput=renderMenuRows;
+$('menuStatus').onchange=renderMenuRows;
+function renderMenuRows(){
+ const q=($('menuSearch')?.value||'').trim().toLocaleLowerCase('id-ID'), status=$('menuStatus')?.value||'all';
+ const filtered=menu.filter(m=>(!q||m.name.toLocaleLowerCase('id-ID').includes(q))&&(status==='all'||(status==='active'&&m.active)||(status==='inactive'&&!m.active)));
+ const activeCount=menu.filter(m=>m.active).length;
+ if($('menuSummary'))$('menuSummary').innerHTML=`<div class="stat"><small>Total menu</small><strong>${menu.length}</strong></div><div class="stat"><small>Menu aktif</small><strong>${activeCount}</strong></div><div class="stat"><small>Menu nonaktif</small><strong>${menu.length-activeCount}</strong></div>`;
+ $('menuRows').innerHTML=filtered.map(m=>`<tr><td><b>${esc(m.name)}</b></td><td>${money(m.price)}</td><td><span class="tag">${m.active?'Aktif':'Nonaktif'}</span></td><td><button class="secondary" data-edit="${m.id}">Ubah</button> <button class="${m.active?'danger':'secondary'}" data-toggle="${m.id}">${m.active?'Nonaktifkan':'Aktifkan'}</button></td></tr>`).join('')||`<tr><td colspan="4">${menu.length?'Tidak ada menu yang cocok dengan pencarian.':'Menu masih kosong.'}</td></tr>`;
+ $('menuRows').querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{
+  const m=menu.find(x=>x.id===b.dataset.edit);if(!m)return;
+  $('menuId').value=m.id;$('menuName').value=m.name;$('menuPrice').value=m.price;$('saveMenuBtn').textContent='Simpan perubahan';clearMsg('menuFormMsg');
+  $('menuName').focus();window.scrollTo({top:0,behavior:'smooth'});
+ });
+ $('menuRows').querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{
+  const m=menu.find(x=>x.id===b.dataset.toggle);if(!m)return;
+  const action=m.active?'menonaktifkan':'mengaktifkan';
+  if(!confirm(`Yakin ingin ${action} menu "${m.name}"?`))return;
+  b.disabled=true;
+  const {error}=await sb.from('menu_items').update({active:!m.active}).eq('id',m.id);
+  if(error){b.disabled=false;return msg('globalMsg','Gagal mengubah status menu: '+error.message,true)}
+  await loadMenu();msg('globalMsg',`Menu "${m.name}" sekarang ${m.active?'nonaktif':'aktif'}.`,false);
+ });
 }
 function printReceipt(t){
  const w=window.open('','_blank','width=380,height=650');if(!w)return msg('globalMsg','Izinkan pop-up untuk mencetak struk.',true);
